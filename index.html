@@ -22,6 +22,7 @@
             border: none;
             border-radius: 5px;
             margin: 10px;
+            transition: background-color 0.3s;
         }
         button:hover {
             background-color: #45a049;
@@ -31,6 +32,10 @@
         }
         button.copy-btn:hover {
             background-color: #0b7dda;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
         }
         .result {
             margin-top: 20px;
@@ -51,6 +56,7 @@
             color: #666;
             font-style: italic;
             min-height: 1.5em;
+            margin: 10px 0;
         }
         .error {
             color: #f44336;
@@ -58,183 +64,293 @@
         .success {
             color: #4CAF50;
         }
+        .warning {
+            color: #ff9800;
+        }
         .auto-detect {
             font-size: 0.9em;
             color: #666;
             margin-top: 20px;
+        }
+        .signal-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .signal-weak {
+            background-color: #ff9800;
+        }
+        .signal-medium {
+            background-color: #ffc107;
+        }
+        .signal-strong {
+            background-color: #4CAF50;
+        }
+        .progress-container {
+            width: 100%;
+            background-color: #f1f1f1;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        .progress-bar {
+            height: 10px;
+            border-radius: 5px;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s;
         }
     </style>
 </head>
 <body>
     <h1>GPS Coordinates Picker</h1>
     <p>Get your current GPS coordinates in decimal format.</p>
-    <button onclick="getLocation()">Get My Location</button>
+    <button id="getLocationBtn" onclick="getLocation()">Get My Location</button>
 
     <div class="result">
         <p><strong>Formatted Coordinates:</strong></p>
         <div class="coordinates" id="formattedCoords">N/A</div>
-        <button class="copy-btn" onclick="copyToClipboard()">Copy to Clipboard</button>
-        <p id="status">Initializing...</p>
+        <button class="copy-btn" id="copyBtn" onclick="copyToClipboard()">Copy to Clipboard</button>
+        <div class="progress-container" id="progressContainer" style="display: none;">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <p id="status">Ready to detect location...</p>
     </div>
 
-    <p class="auto-detect" id="autoStatus">Auto-detection in progress...</p>
+    <p class="auto-detect" id="autoStatus"></p>
 
     <script>
-        // Global variable to track if we have coordinates
+        // Global variables
         let hasCoordinates = false;
+        let watchId = null;
+        let progressInterval;
+        const maxTimeout = 20000; // 20 seconds max timeout
+        const progressUpdateInterval = 100; // Update progress every 100ms
+
+        // DOM elements
+        const getLocationBtn = document.getElementById('getLocationBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const statusElement = document.getElementById('status');
+        const autoStatusElement = document.getElementById('autoStatus');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
 
         // Check for geolocation support immediately
         window.onload = function() {
-            const status = document.getElementById('status');
-            const autoStatus = document.getElementById('autoStatus');
-            
             if (!navigator.geolocation) {
-                status.textContent = "Geolocation is not supported by this browser.";
-                status.className = "error";
-                autoStatus.textContent = "Auto-detection failed: No geolocation support";
+                statusElement.textContent = "Geolocation is not supported by this browser.";
+                statusElement.className = "error";
+                autoStatusElement.textContent = "Auto-detection failed: No geolocation support";
+                getLocationBtn.disabled = true;
                 return;
             }
 
             // Try to get high-accuracy position automatically
+            tryAutoDetection();
+        };
+
+        function tryAutoDetection() {
+            autoStatusElement.textContent = "Attempting automatic detection...";
+            
             navigator.geolocation.getCurrentPosition(
                 autoShowPosition,
                 autoShowError,
                 {
                     enableHighAccuracy: true,
-                    timeout: 15000,
-                    maximumAge: 30000
+                    timeout: 8000, // Shorter timeout for auto-detection
+                    maximumAge: 0
                 }
             );
-        };
+        }
 
         function autoShowPosition(position) {
             if (!hasCoordinates) {
-                const lat = position.coords.latitude;
-                const lon = position.coords.longitude;
-                
-                // Format coordinates as -0.6341, 35.7364
-                const formattedLat = lat.toFixed(6);
-                const formattedLon = lon.toFixed(6);
-                const formattedCoords = `${formattedLat}, ${formattedLon}`;
-                
-                document.getElementById('formattedCoords').textContent = formattedCoords;
-                document.getElementById('status').textContent = "Coordinates detected automatically!";
-                document.getElementById('status').className = "success";
-                document.getElementById('autoStatus').textContent = "Location detected automatically (permission was already granted)";
-                
+                updatePosition(position);
+                statusElement.textContent = "Coordinates detected automatically!";
+                statusElement.className = "success";
+                autoStatusElement.textContent = "Location detected (permission was already granted)";
+                autoStatusElement.className = "success";
                 hasCoordinates = true;
             }
         }
 
         function autoShowError(error) {
-            const autoStatus = document.getElementById('autoStatus');
-            const status = document.getElementById('status');
-            
-            status.textContent = "Click the button to get your location";
-            status.className = "";
-            
             switch(error.code) {
                 case error.PERMISSION_DENIED:
-                    autoStatus.textContent = "Auto-detection: Location permission not yet granted";
+                    autoStatusElement.textContent = "Auto-detection: Location permission not yet granted";
                     break;
                 case error.POSITION_UNAVAILABLE:
-                    autoStatus.textContent = "Auto-detection: Location unavailable (try again)";
+                    autoStatusElement.textContent = "Auto-detection: Location unavailable (try again)";
                     break;
                 case error.TIMEOUT:
-                    autoStatus.textContent = "Auto-detection: Timed out (click button to retry)";
+                    autoStatusElement.textContent = "Auto-detection: Quick detection timed out";
                     break;
                 default:
-                    autoStatus.textContent = "Auto-detection: Couldn't determine location";
+                    autoStatusElement.textContent = "Auto-detection: Couldn't determine location";
                     break;
             }
+            autoStatusElement.className = "warning";
+            statusElement.textContent = "Click the button to get your location";
         }
 
         function getLocation() {
-            const status = document.getElementById('status');
-            const autoStatus = document.getElementById('autoStatus');
+            // Reset UI
+            getLocationBtn.disabled = true;
+            copyBtn.disabled = true;
+            statusElement.textContent = "🌍 Starting GPS detection...";
+            statusElement.className = "";
+            autoStatusElement.textContent = "Manual detection in progress...";
+            autoStatusElement.className = "";
+            progressContainer.style.display = "block";
+            progressBar.style.width = "0%";
             
-            status.textContent = "Fetching coordinates...";
-            status.className = "";
-            autoStatus.textContent = "Manual detection in progress...";
-            
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    showPosition, 
-                    showError, 
-                    {
-                        enableHighAccuracy: true,
-                        timeout: 10000,
-                        maximumAge: 0
-                    }
-                );
-            } else {
-                status.textContent = "Geolocation is not supported by this browser.";
-                status.className = "error";
-                autoStatus.textContent = "Auto-detection failed: No geolocation support";
+            // Clear any previous watch
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
             }
+            
+            // Start progress bar animation
+            let elapsed = 0;
+            progressInterval = setInterval(() => {
+                elapsed += progressUpdateInterval;
+                const progressPercent = Math.min(100, (elapsed / maxTimeout) * 100);
+                progressBar.style.width = `${progressPercent}%`;
+                
+                // Update status messages based on progress
+                if (progressPercent > 70 && !hasCoordinates) {
+                    statusElement.innerHTML = '<span class="signal-indicator signal-weak"></span> Still searching... Try moving to an open area';
+                } else if (progressPercent > 40 && !hasCoordinates) {
+                    statusElement.innerHTML = '<span class="signal-indicator signal-medium"></span> Acquiring GPS signal...';
+                }
+            }, progressUpdateInterval);
+
+            // First try a quick high-accuracy detection
+            navigator.geolocation.getCurrentPosition(
+                position => {
+                    handleSuccess(position);
+                },
+                () => {
+                    // If quick attempt fails, fall back to watchPosition with longer timeout
+                    statusElement.innerHTML = '<span class="signal-indicator signal-medium"></span> Getting precise location...';
+                    
+                    watchId = navigator.geolocation.watchPosition(
+                        position => {
+                            handleSuccess(position);
+                            navigator.geolocation.clearWatch(watchId);
+                        },
+                        error => {
+                            handleError(error);
+                            navigator.geolocation.clearWatch(watchId);
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: maxTimeout,
+                            maximumAge: 0
+                        }
+                    );
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 5000,  // Quick initial attempt
+                    maximumAge: 0
+                }
+            );
+            
+            // Set a maximum timeout as a safety net
+            setTimeout(() => {
+                if (!hasCoordinates) {
+                    handleError({ code: 3 }); // TIMEOUT error code
+                }
+            }, maxTimeout);
         }
 
-        function showPosition(position) {
-            const lat = position.coords.latitude;
-            const lon = position.coords.longitude;
+        function handleSuccess(position) {
+            clearInterval(progressInterval);
+            updatePosition(position);
             
-            // Format coordinates as -0.6341, 35.7364
-            const formattedLat = lat.toFixed(6);
-            const formattedLon = lon.toFixed(6);
-            const formattedCoords = `${formattedLat}, ${formattedLon}`;
+            statusElement.innerHTML = '<span class="signal-indicator signal-strong"></span> ✅ Location found!';
+            statusElement.className = "success";
+            autoStatusElement.textContent = "GPS signal acquired successfully";
+            autoStatusElement.className = "success";
             
-            document.getElementById('formattedCoords').textContent = formattedCoords;
+            getLocationBtn.disabled = false;
+            copyBtn.disabled = false;
+            progressBar.style.backgroundColor = "#4CAF50";
+            progressBar.style.width = "100%";
             
-            const status = document.getElementById('status');
-            status.textContent = "Coordinates retrieved successfully!";
-            status.className = "success";
-            
-            document.getElementById('autoStatus').textContent = "Location detected successfully";
+            // Hide progress bar after success
+            setTimeout(() => {
+                progressContainer.style.display = "none";
+            }, 2000);
             
             hasCoordinates = true;
         }
 
-        function showError(error) {
-            const status = document.getElementById('status');
-            const autoStatus = document.getElementById('autoStatus');
-            
-            status.className = "error";
-            autoStatus.className = "error";
+        function updatePosition(position) {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            const formattedCoords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+            document.getElementById('formattedCoords').textContent = formattedCoords;
+        }
+
+        function handleError(error) {
+            clearInterval(progressInterval);
+            getLocationBtn.disabled = false;
+            copyBtn.disabled = document.getElementById('formattedCoords').textContent === "N/A";
+            progressBar.style.backgroundColor = "#f44336";
             
             switch(error.code) {
-                case error.PERMISSION_DENIED:
-                    status.textContent = "Error: You denied the request for Geolocation. Please enable location permissions.";
-                    autoStatus.textContent = "Permission denied in browser settings";
+                case 1: // PERMISSION_DENIED
+                    statusElement.textContent = "❌ Location access denied. Please enable permissions in your browser settings.";
+                    autoStatusElement.textContent = "Check browser location permissions";
                     break;
-                case error.POSITION_UNAVAILABLE:
-                    status.textContent = "Error: Location information is unavailable.";
-                    autoStatus.textContent = "Location unavailable (try moving outdoors)";
+                case 2: // POSITION_UNAVAILABLE
+                    statusElement.innerHTML = '<span class="signal-indicator signal-weak"></span> ⚠️ GPS unavailable. Try moving to an open area.';
+                    autoStatusElement.textContent = "Poor GPS signal - try outdoors";
                     break;
-                case error.TIMEOUT:
-                    status.textContent = "Error: The request to get your location timed out. Please try again.";
-                    autoStatus.textContent = "Location detection timed out";
+                case 3: // TIMEOUT
+                    statusElement.innerHTML = '<span class="signal-indicator signal-weak"></span> ⌛ GPS timeout. The signal is weak or blocked.';
+                    autoStatusElement.textContent = "Consider trying again in a different location";
                     break;
                 default:
-                    status.textContent = "Error: An unknown error occurred while getting your location.";
-                    autoStatus.textContent = "Unknown error occurred";
+                    statusElement.textContent = "❓ Unknown error occurred during GPS detection";
+                    autoStatusElement.textContent = "Please try again later";
                     break;
             }
+            
+            statusElement.className = "error";
+            autoStatusElement.className = "error";
+            
+            // Hide progress bar after delay
+            setTimeout(() => {
+                progressContainer.style.display = "none";
+            }, 2000);
         }
 
         function copyToClipboard() {
             const coords = document.getElementById('formattedCoords').textContent;
             if (coords === "N/A") {
-                document.getElementById('status').textContent = "No coordinates to copy! Get location first.";
-                document.getElementById('status').className = "error";
+                statusElement.textContent = "No coordinates to copy! Get location first.";
+                statusElement.className = "error";
                 return;
             }
             
             navigator.clipboard.writeText(coords).then(() => {
-                document.getElementById('status').textContent = "Coordinates copied to clipboard!";
-                document.getElementById('status').className = "success";
+                statusElement.textContent = "✅ Coordinates copied to clipboard!";
+                statusElement.className = "success";
+                
+                // Temporarily change button appearance
+                copyBtn.textContent = "Copied!";
+                copyBtn.style.backgroundColor = "#4CAF50";
+                setTimeout(() => {
+                    copyBtn.textContent = "Copy to Clipboard";
+                    copyBtn.style.backgroundColor = "#2196F3";
+                }, 2000);
             }).catch(err => {
-                document.getElementById('status').textContent = "Failed to copy coordinates. Please try again.";
-                document.getElementById('status').className = "error";
+                statusElement.textContent = "Failed to copy coordinates. Please try again.";
+                statusElement.className = "error";
                 console.error('Failed to copy: ', err);
             });
         }
